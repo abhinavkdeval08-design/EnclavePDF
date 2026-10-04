@@ -2,10 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ResultMode, Settings, WorkerIn, WorkerOut } from './types';
 
 export type Status = 'idle' | 'working' | 'done' | 'error' | 'needs-password';
+
 export interface Result {
   url: string;
   size: number;
   mode: ResultMode;
+  fellBack?: boolean;
 }
 
 export function usePdfCompressor() {
@@ -54,6 +56,9 @@ export function usePdfCompressor() {
 
     worker.onmessage = (e: MessageEvent<WorkerOut>) => {
       const m = e.data;
+      // Guard: Ignore pdfjs-internal handshake messages lacking type field
+      if (!m || typeof (m as any).type !== 'string') return;
+
       if (m.type === 'progress') {
         setProgress({ page: m.page, total: m.total });
       } else if (m.type === 'done') {
@@ -62,10 +67,11 @@ export function usePdfCompressor() {
           url: URL.createObjectURL(blob),
           size: blob.size,
           mode: m.mode,
+          fellBack: m.fellBack,
         });
         setStatus('done');
-        killWorker(); // free the worker's heap
-      } else {
+        killWorker();
+      } else if (m.type === 'error') {
         setError(m.message);
         setStatus(
           m.code === 'PASSWORD_REQUIRED' || m.code === 'PASSWORD_INCORRECT'
@@ -77,7 +83,7 @@ export function usePdfCompressor() {
     };
 
     worker.onerror = () => {
-      setError('The compression engine crashed.');
+      setError('The compression engine crashed unexpectedly.');
       setStatus('error');
       killWorker();
     };
@@ -102,5 +108,5 @@ export function usePdfCompressor() {
     fileRef.current = null;
   }, []);
 
-  return { status, progress, result, error, compress, cancel, reset };
+  return { status, progress, result, error, file: fileRef.current, compress, cancel, reset };
 }
