@@ -1,21 +1,27 @@
 /// <reference lib="webworker" />
 import * as pdfjs from 'pdfjs-dist';
-
-// @ts-ignore - untyped bundled worker asset
-import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs';
-
+import workerSrc from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import { PDFDocument } from 'pdf-lib';
 import type { WorkerIn, WorkerOut, ResultMode } from './types';
 
-// Run PDF.js parser directly inside this worker thread to avoid nested-worker deadlocks
-(globalThis as any).pdfjsWorker = pdfjsWorker;
+// Ensure PDF.js worker resolves cleanly across mobile & desktop browsers
+pdfjs.GlobalWorkerOptions.workerSrc = workerSrc;
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 const post = (m: WorkerOut, t: Transferable[] = []) => ctx.postMessage(m, t);
 
 const MAX_PIXELS = 16_000_000;
 
-// pdfjs v4.10 expects a Class reference passed to CanvasFactory
+// Sanitize mobile scanner PDFs (CamScanner often inserts bytes before '%PDF-')
+function sanitizePdfBuffer(buf: Uint8Array): Uint8Array {
+  for (let i = 0; i < Math.min(buf.length - 4, 1024); i++) {
+    if (buf[i] === 0x25 && buf[i + 1] === 0x50 && buf[i + 2] === 0x44 && buf[i + 3] === 0x46) {
+      return i === 0 ? buf : buf.subarray(i);
+    }
+  }
+  return buf;
+}
+
 class OffscreenCanvasFactory {
   create(w: number, h: number) {
     const width = Math.max(1, Math.floor(w));
@@ -108,7 +114,7 @@ async function rasterize(src: Uint8Array, dpi: number, quality: number, password
 }
 
 async function optimizeOnly(src: Uint8Array) {
-  const doc = await PDFDocument.load(src, { updateMetadata: false });
+  const doc = await PDFDocument.load(src, { updateMetadata: false, ignoreEncryption: false });
   doc.setTitle('');
   doc.setAuthor('');
   doc.setSubject('');
@@ -119,14 +125,14 @@ async function optimizeOnly(src: Uint8Array) {
 }
 
 ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
-  // Handshake response: confirm worker thread & dependencies are fully loaded
   if (e.data.type === 'ping') {
     post({ type: 'ready' });
     return;
   }
 
   const { buffer, settings, password } = e.data;
-  const original = new Uint8Array(buffer);
+  const rawBytes = new Uint8Array(buffer);
+  const original = sanitizePdfBuffer(rawBytes);
   const backup = original.slice();
 
   try {
@@ -148,17 +154,23 @@ ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
       }
     } catch (err: any) {
       const n = err?.name;
-      // Do not swallow password, encryption, or format errors
-      if (n === 'PasswordException' || n === 'InvalidPDFException' || n === 'FormatError') {
+      // Only abort for password prompts. For mobile format quirks, seamlessly fall back to pdf-lib!
+      if (n === 'PasswordException') {
         throw err;
       }
 
-      console.warn('[EnclavePDF] raster failed, falling back to lossless engine:', err);
+      console.warn('[EnclavePDF] rasterization bypassed, falling back to pdf-lib engine:', err);
       fellBack = true;
-      const opt = await optimizeOnly(backup.slice());
-      if (opt.length < backup.length) {
-        best = opt;
-        mode = 'optimized';
+
+      try {
+        const opt = await optimizeOnly(backup.slice());
+        if (opt.length < backup.length) {
+          best = opt;
+          mode = 'optimized';
+        }
+      } catch (optErr) {
+        // If both engines fail, only then bubble up invalid PDF error
+        throw err;
       }
     }
 
@@ -172,12 +184,6 @@ ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
         code: err.code === 2 ? 'PASSWORD_INCORRECT' : 'PASSWORD_REQUIRED',
         message: 'This PDF is password-protected.',
       });
-    } else if (name === 'InvalidPDFException' || name === 'FormatError') {
-      post({
-        type: 'error',
-        code: 'INVALID',
-        message: 'This file is not a readable PDF.',
-      });
     } else if (err instanceof RangeError || /memory|allocation/i.test(String(err?.message))) {
       post({
         type: 'error',
@@ -187,8 +193,8 @@ ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
     } else {
       post({
         type: 'error',
-        code: 'UNKNOWN',
-        message: String(err?.message ?? err),
+        code: 'INVALID',
+        message: 'This file is not a readable PDF.',
       });
     }
   }
