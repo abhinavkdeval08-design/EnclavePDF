@@ -7,7 +7,7 @@ import * as pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs';
 import { PDFDocument } from 'pdf-lib';
 import type { WorkerIn, WorkerOut, ResultMode } from './types';
 
-// Run PDF.js parser directly inside this worker thread to eliminate nested-worker deadlocks
+// Run PDF.js parser directly inside this worker thread to avoid nested-worker deadlocks
 (globalThis as any).pdfjsWorker = pdfjsWorker;
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -119,6 +119,12 @@ async function optimizeOnly(src: Uint8Array) {
 }
 
 ctx.onmessage = async (e: MessageEvent<WorkerIn>) => {
+  // Handshake response: confirm worker thread & dependencies are fully loaded
+  if (e.data.type === 'ping') {
+    post({ type: 'ready' });
+    return;
+  }
+
   const { buffer, settings, password } = e.data;
   const original = new Uint8Array(buffer);
   const backup = original.slice();

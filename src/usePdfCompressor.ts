@@ -29,8 +29,35 @@ export function usePdfCompressor() {
     }
   };
 
+  // Pre-warm worker on page mount using an explicit handshake.
+  // Terminates only after the worker parses all dependencies and replies 'ready',
+  // ensuring all async chunks (pdfjs, pdf-lib) are populated in browser HTTP cache.
   useEffect(() => {
+    let w: Worker | null = null;
+    const done = () => {
+      if (w) {
+        w.terminate();
+        w = null;
+      }
+    };
+
+    try {
+      w = new Worker(new URL('./pdfCompressor.worker.ts', import.meta.url), {
+        type: 'module',
+      });
+      w.onmessage = (e: MessageEvent<WorkerOut>) => {
+        if (e.data?.type === 'ready') {
+          done();
+        }
+      };
+      w.onerror = done;
+      w.postMessage({ type: 'ping' } satisfies WorkerIn);
+    } catch {
+      // Ignore in unsupported environments
+    }
+
     return () => {
+      done();
       killWorker();
     };
   }, []);
@@ -56,7 +83,7 @@ export function usePdfCompressor() {
 
     worker.onmessage = (e: MessageEvent<WorkerOut>) => {
       const m = e.data;
-      // Guard: Ignore pdfjs-internal handshake messages lacking type field
+      // Guard: Ignore pdfjs internal messages lacking a type string
       if (!m || typeof (m as any).type !== 'string') return;
 
       if (m.type === 'progress') {
@@ -70,7 +97,7 @@ export function usePdfCompressor() {
           fellBack: m.fellBack,
         });
         setStatus('done');
-        killWorker();
+        killWorker(); // Immediately release worker heap memory
       } else if (m.type === 'error') {
         setError(m.message);
         setStatus(
@@ -89,6 +116,10 @@ export function usePdfCompressor() {
     };
 
     const buffer = await file.arrayBuffer();
+
+    // Guard: Do not post message if operation was cancelled while reading the ArrayBuffer
+    if (workerRef.current !== worker) return;
+
     worker.postMessage(
       { type: 'compress', buffer, settings, password } satisfies WorkerIn,
       [buffer]
@@ -108,5 +139,5 @@ export function usePdfCompressor() {
     fileRef.current = null;
   }, []);
 
-  return { status, progress, result, error, file: fileRef.current, compress, cancel, reset };
+  return { status, progress, result, error, compress, cancel, reset };
 }
