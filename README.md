@@ -15,9 +15,9 @@ Most online PDF compressors upload your file to a server. That's a poor trade fo
 
 1. Drop a PDF on the page, or click to browse. The UI takes files up to 50 MB.
 2. Pick a preset (see the table below).
-3. When it finishes, you see how much was saved, the original and compressed sizes, and a one-line note about what happened to the text. **Download document** saves the result. **Try different settings** lets you re-run the same file with another preset, and **New file** starts over.
+3. When it finishes, you see how much was saved, the original and compressed sizes, and a one-line note about what happened to the text. **Download document** saves the result. **Re-run** takes you back to the preset picker with the same file still loaded, and **New file** starts over.
 
-The result card also shows which preset and DPI produced the number, so two runs on the same file are easy to compare.
+In image mode the result card also shows the preset, DPI and quality behind the number, so two runs on the same file are easy to compare. In lossless mode it says no image settings were applied.
 
 ## What it does to your file
 
@@ -33,7 +33,19 @@ The worker tries image mode first. If the result isn't smaller than the input, i
 |---|---|---|---|
 | Low | 150 | 80% | You care about how it looks |
 | Balanced | 110 | 60% | Default |
-| Strong | 72 | 40% | Upload limits, like portals that cap at 200 KB |
+| Strong | 72 | 40% | Smallest file. Often small enough for tight upload limits, but a target size isn't guaranteed |
+
+### Results so far
+
+Three of my own test files, one run each, so read them as examples and not as benchmarks.
+
+| File | Mode | Preset | Before | After |
+|---|---|---|---|---|
+| 37-page sample PDF | Image | Balanced | 10.1 MB | 4.9 MB (52% smaller) |
+| Academic calendar | Image | Balanced | 1.5 MB | 235.7 KB (85% smaller) |
+| Course syllabus (mostly text) | Lossless | n/a | 696 KB | 695.8 KB |
+
+The calendar is mostly text, so it shrank a lot only because every page became an image. Check a result at 100% zoom before you send it anywhere that needs to be readable.
 
 ## How it's put together
 
